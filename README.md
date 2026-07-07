@@ -71,18 +71,6 @@ Core tables:
 - `task_recommendations`: selected task and blocked reason.
 - `sandbox_runs`: Daytona run metadata.
 
-## Demo shortcuts
-
-Use three iPhone Shortcuts rather than background automation:
-
-- `Normal`: stable glucose/HRV.
-- `Crash`: low HRV or glucose drop.
-- `Recovery`: stable follow-up row.
-
-Manual triggers are better than every-second automation because iOS Shortcuts
-are not a reliable one-second background scheduler and CGM data is not a 1 Hz
-signal.
-
 ## Expected latency
 
 | Step | Expected latency |
@@ -93,19 +81,3 @@ signal.
 | RocketRide classification | 0.2-1.5s |
 | Neo4j blocker query | <0.3s local |
 | Daytona sandbox branch | 8-25s |
-
-## One-shot recording checklist
-
-1. Open `https://vagus-db-two.butterbase.dev`.
-2. Open iPhone Mirroring with Stelo, Oura, and Shortcuts ready.
-3. Open Neo4j Browser for the task-blocker graph.
-4. In dashboard Config, save app id and token.
-5. Start `app.py`.
-6. Put macOS menu bar in frame.
-7. Start Loom with camera on.
-8. Show CGM and Oura briefly.
-9. Turn camera off.
-10. Screen-share dashboard plus menu bar.
-11. Tap `Normal`, then `Crash`, then `Recovery` Shortcut through iPhone Mirroring.
-12. Switch briefly to Neo4j Browser to show `(:Task)-[:BLOCKS]->(:Task)`.
-13. Narrate the logs and Task UI changes.
