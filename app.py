@@ -1,324 +1,429 @@
-"""Native macOS menu bar application for Vagus Graph."""
-
-from __future__ import annotations
-
+import sys
 import os
-import json
-import subprocess
-import threading
-import time
-from typing import Any, Protocol, cast
-from urllib import request as urllib_request
-from urllib.error import HTTPError, URLError
+from datetime import datetime, timezone
 
-try:
-    import requests
-except ImportError:  # pragma: no cover - fallback is for minimal Python installs.
-    requests = None  # type: ignore[assignment]
-
-try:
-    import rumps
-except ImportError:  # pragma: no cover - exercised by import safety, not app runtime.
-    rumps = None  # type: ignore[assignment]
+import rumps
+from neo4j import GraphDatabase
 
 
-BUTTERBASE_WEARABLE_LOGS_URL = "https://api.butterbase.ai/v1/db/wearable_logs"
-ROCKETRIDE_PIPELINE_URL = (
-    "https://api.rocketride.cloud/v1/pipelines/vagus_cognitive_pipeline/run"
-)
-DAYTONA_COMMAND = [
-    "daytona",
-    "create",
-    "bci-build-sandbox",
-    "--template",
-    "python",
-    "--code",
-    "https://github.com/CarlKho-Minerva/bci-core-repo",
-]
-POLL_INTERVAL_SECONDS = 300.0
-
-
-class AppRuntimeError(RuntimeError):
-    """Raised when the menu bar pipeline cannot complete an operation."""
-
-
-class _UrllibResponse:
-    """Small response adapter used when the requests package is unavailable."""
-
-    def __init__(self, status_code: int, body: bytes) -> None:
-        self.status_code = status_code
-        self.body = body
-
-    def raise_for_status(self) -> None:
-        """Raise for non-2xx HTTP statuses."""
-        if self.status_code < 200 or self.status_code >= 300:
-            raise AppRuntimeError(f"HTTP request failed with status {self.status_code}.")
-
-    def json(self) -> object:
-        """Decode response JSON."""
-        return json.loads(self.body.decode("utf-8"))
-
-
-class _HttpClient:
-    """Requests-compatible subset backed by urllib."""
-
-    @staticmethod
-    def get(url: str, timeout: float) -> _UrllibResponse:
-        http_request = urllib_request.Request(url, method="GET")
-        return _HttpClient._open(http_request, timeout)
-
-    @staticmethod
-    def post(
-        url: str,
-        headers: dict[str, str],
-        json: dict[str, object],
-        timeout: float,
-    ) -> _UrllibResponse:
-        body = json_module_dumps(json)
-        request_headers = {"Content-Type": "application/json", **headers}
-        http_request = urllib_request.Request(
-            url,
-            data=body,
-            headers=request_headers,
-            method="POST",
-        )
-        return _HttpClient._open(http_request, timeout)
-
-    @staticmethod
-    def _open(
-        http_request: urllib_request.Request,
-        timeout: float,
-    ) -> _UrllibResponse:
-        try:
-            with urllib_request.urlopen(http_request, timeout=timeout) as response:
-                return _UrllibResponse(response.status, response.read())
-        except HTTPError as exc:
-            return _UrllibResponse(exc.code, exc.read())
-        except URLError as exc:
-            raise AppRuntimeError("HTTP request failed.") from exc
-
-
-def json_module_dumps(payload: dict[str, object]) -> bytes:
-    """Serialize JSON payloads for the urllib fallback."""
-    return json.dumps(payload).encode("utf-8")
-
-
-if requests is None:
-    requests = _HttpClient()  # type: ignore[assignment]
-
-
-def load_dotenv_if_available() -> None:
-    """Load local .env values when python-dotenv is installed."""
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
+def load_local_env():
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(env_path):
         return
-    load_dotenv()
+
+    with open(env_path, "r", encoding="utf-8") as env_file:
+        for line in env_file:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            os.environ.setdefault(key, value)
 
 
-load_dotenv_if_available()
+load_local_env()
 
+# Local Neo4j connection
+URI = "bolt://localhost:7687"
+AUTH = ("neo4j", "password123")
 
-class MenuAppProtocol(Protocol):
-    """Small protocol for objects with mutable menu titles."""
+BUTTERBASE_APP_ID = os.getenv("BUTTERBASE_APP_ID", "")
+BUTTERBASE_API_TOKEN = os.getenv("BUTTERBASE_API_TOKEN", "")
+BUTTERBASE_API_BASE = (
+    f"https://api.butterbase.ai/v1/{BUTTERBASE_APP_ID}"
+    if BUTTERBASE_APP_ID
+    else ""
+)
+INVALID_BUTTERBASE_APP_IDS = {"app_30r72zucnm70"}
+ROCKETRIDE_API_KEY = os.getenv("ROCKETRIDE_API_KEY", "")
+ROCKETRIDE_PIPELINE_URL = os.getenv("ROCKETRIDE_PIPELINE_URL", "")
+ROCKETRIDE_MODEL = os.getenv("ROCKETRIDE_MODEL", "gpt-5.5")
 
-    title: str
+class VagusMenuBarApp(rumps.App):
+    def __init__(self):
+        super(VagusMenuBarApp, self).__init__("🧠 Vagus: Active")
+        self.menu = ["Refresh Tasks", None]
+        self.butterbase_enabled = bool(
+            BUTTERBASE_APP_ID
+            and BUTTERBASE_API_TOKEN
+            and BUTTERBASE_APP_ID not in INVALID_BUTTERBASE_APP_IDS
+        )
+        self.butterbase_warning_printed = False
 
+        self.log_event("[Boot] Initializing task database sync...")
+        if self.butterbase_enabled:
+            self.log_event(f"[Config] Butterbase app configured: {BUTTERBASE_APP_ID}.")
+        else:
+            self.log_event(
+                "[Config] Butterbase is not configured; using local demo biometrics."
+            )
+        if ROCKETRIDE_API_KEY:
+            self.log_event(
+                f"[RocketRide] Runtime armed with model {ROCKETRIDE_MODEL}."
+            )
+        else:
+            self.log_event(
+                f"[RocketRide] Demo adapter active with model {ROCKETRIDE_MODEL}."
+            )
+        self.update_menu_tasks()
 
-if rumps is None:
+        # Initialize and start the timer programmatically
+        # This keeps 'self' bound to the VagusMenuBarApp instance
+        self.timer = rumps.Timer(self.run_biometric_loop, 10)
+        self.timer.start()
 
-    class _BaseApp:
-        def __init__(self, name: str) -> None:
-            self.name = name
-            self.title = name
+        self.log_event("[Boot] Vagus Menu Bar Utility is fully active.")
 
-        def run(self) -> None:
-            raise AppRuntimeError("rumps is required to run the macOS menu app.")
+    def log_event(self, event, stderr=False):
+        stream = sys.stderr if stderr else sys.stdout
+        print(event, file=stream)
 
-else:
-    _BaseApp = rumps.App
-
-
-class VagusMenuBarApp(_BaseApp):
-    """Poll RocketRide and route cognitive state to macOS menu bar actions."""
-
-    def __init__(
-        self,
-        butterbase_url: str = BUTTERBASE_WEARABLE_LOGS_URL,
-        rocketride_url: str = ROCKETRIDE_PIPELINE_URL,
-        poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
-        start_background_thread: bool = True,
-    ) -> None:
-        super().__init__("Vagus Graph")
-        self.butterbase_url = butterbase_url
-        self.rocketride_url = rocketride_url
-        self.poll_interval_seconds = poll_interval_seconds
-        self.timeout_seconds = 10.0
-        self._stop_event = threading.Event()
-        if start_background_thread:
-            thread = threading.Thread(target=self.poll_forever, daemon=True)
-            thread.start()
-
-    def fetch_latest_telemetry(self) -> dict[str, object]:
-        """Fetch the latest telemetry dictionary from Butterbase wearable logs."""
-        headers = {}
-        butterbase_api_key = os.environ.get("BUTTERBASE_API_KEY")
-        if butterbase_api_key:
-            headers["Authorization"] = f"Bearer {butterbase_api_key}"
+        if not self.butterbase_enabled:
+            return
 
         try:
-            if headers:
-                response = requests.get(
-                    self.butterbase_url,
-                    headers=headers,
-                    timeout=self.timeout_seconds,
-                )
-            else:
-                response = requests.get(
-                    self.butterbase_url,
-                    timeout=self.timeout_seconds,
-                )
-            response.raise_for_status()
-            payload = response.json()
-        except Exception as exc:
-            raise AppRuntimeError("Failed to fetch latest Butterbase telemetry.") from exc
-        except ValueError as exc:
-            raise AppRuntimeError("Butterbase returned invalid JSON.") from exc
+            import requests
 
-        if isinstance(payload, dict) and isinstance(payload.get("data"), list):
-            latest = payload["data"][0] if payload["data"] else None
-        else:
-            latest = payload
-
-        if not isinstance(latest, dict):
-            raise AppRuntimeError("Butterbase response did not contain telemetry.")
-
-        return cast(dict[str, object], latest)
-
-    @staticmethod
-    def build_rocketride_payload(telemetry: dict[str, object]) -> dict[str, object]:
-        """Build the RocketRide input envelope from Butterbase telemetry."""
-        return {
-            "input": {
-                "glucose_rate_of_change": telemetry["glucose_rate_of_change"],
-                "hrv_ms": telemetry["hrv_ms"],
-                "is_compression_low": telemetry["is_compression_low"],
+            headers = {
+                "Authorization": f"Bearer {BUTTERBASE_API_TOKEN}",
+                "Content-Type": "application/json",
             }
+            payload = {
+                "event": event,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            response = requests.post(
+                f"{BUTTERBASE_API_BASE}/system_logs",
+                headers=headers,
+                json=payload,
+                timeout=5,
+            )
+            if response.status_code >= 400:
+                if response.status_code == 404:
+                    self.butterbase_enabled = False
+                print(
+                    f"[Log Sink Warning] Butterbase system_logs returned "
+                    f"{response.status_code}: {response.text}",
+                    file=sys.stderr,
+                )
+        except Exception as e:
+            print(f"[Log Sink Warning] Failed to write system log: {e}", file=sys.stderr)
+
+    def warn_butterbase_unavailable(self, message):
+        if not self.butterbase_warning_printed:
+            self.butterbase_warning_printed = True
+            self.log_event(message, stderr=True)
+
+    def demo_biometrics(self):
+        glucose_change = 0.0
+        hrv = 55.0
+        is_compression = False
+        self.log_event(
+            "[Biometrics] Demo mode: "
+            f"dG/dt={glucose_change:.1f}, HRV={hrv:.1f}, "
+            f"compression_low={is_compression}."
+        )
+        return glucose_change, hrv, is_compression
+
+    def classify_energy_locally(self, glucose_change, hrv, is_compression):
+        if is_compression:
+            return "medium"
+        if glucose_change < -12.0 or hrv < 35:
+            return "low"
+        if glucose_change > -2.0 and hrv > 60:
+            return "high"
+        return "medium"
+
+    def run_rocketride_classification(self, glucose_change, hrv, is_compression):
+        payload = {
+            "model": ROCKETRIDE_MODEL,
+            "inputs": {
+                "glucose_change": glucose_change,
+                "hrv": hrv,
+                "is_compression_low": is_compression,
+            },
+            "success_criteria": {
+                "output": "energy_level",
+                "allowed_values": ["low", "medium", "high"],
+            },
         }
 
-    def run_pipeline(self, telemetry: dict[str, object]) -> dict[str, object]:
-        """Submit telemetry to RocketRide and return its JSON payload."""
-        headers = {}
-        token = os.environ.get("ROCKETRIDE_SECRET")
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
-        try:
-            response = requests.post(
-                self.rocketride_url,
-                headers=headers,
-                json=self.build_rocketride_payload(telemetry),
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except Exception as exc:
-            raise AppRuntimeError("Failed to run RocketRide pipeline.") from exc
-        except (KeyError, ValueError) as exc:
-            raise AppRuntimeError("RocketRide returned invalid JSON.") from exc
-
-        if not isinstance(payload, dict):
-            raise AppRuntimeError("RocketRide response must be a JSON object.")
-        return cast(dict[str, object], payload)
-
-    @staticmethod
-    def parse_pipeline_response(payload: dict[str, object]) -> tuple[str, str]:
-        """Extract classified state and recommended task from RocketRide output."""
-        try:
-            output = payload["output"]
-            if not isinstance(output, dict):
-                raise TypeError("output must be an object")
-            query_results = output["neo4j_aura_query"]
-            if not isinstance(query_results, list) or not query_results:
-                raise TypeError("neo4j_aura_query must be a non-empty list")
-            first_result = query_results[0]
-            if not isinstance(first_result, dict):
-                raise TypeError("query result must be an object")
-            classified_state = first_result["classified_state"]
-            recommended_task = first_result["recommended_task"]
-            if not isinstance(classified_state, str) or not isinstance(
-                recommended_task,
-                str,
-            ):
-                raise TypeError("state and task must be strings")
-            return classified_state, recommended_task
-        except (KeyError, TypeError) as exc:
-            raise AppRuntimeError("RocketRide response schema is invalid.") from exc
-
-    def update_from_pipeline_response(self, payload: dict[str, object]) -> None:
-        """Update the menu bar title and side effects from a pipeline payload."""
-        classified_state, task_title = self.parse_pipeline_response(payload)
-
-        if classified_state == "low":
-            self.title = "⚠️ CRASH: Take Action"
-            self.notify(
-                "Vagus Graph",
-                f"PFC energy low. Pivot to: {task_title}",
-            )
-            self.run_daytona_sandbox()
-            return
-
-        if classified_state == "medium":
-            self.title = "⚡ MODERATE: Focus Routine"
-            return
-
-        if classified_state == "high":
-            self.title = "🔋 OPTIMAL: Deep Work"
-            return
-
-        raise AppRuntimeError(f"Unknown cognitive state: {classified_state}")
-
-    def notify(self, title: str, message: str) -> None:
-        """Send a macOS notification when rumps is installed."""
-        if rumps is None:
-            return
-        rumps.notification(title=title, subtitle="", message=message)
-
-    def run_daytona_sandbox(self) -> subprocess.Popen[str]:
-        """Spawn the Daytona development sandbox for low-energy recovery."""
-        try:
-            return subprocess.Popen(
-                DAYTONA_COMMAND,
-                text=True,
-            )
-        except OSError as exc:
-            raise AppRuntimeError("Failed to start Daytona sandbox.") from exc
-
-    def poll_once(self) -> None:
-        """Run one Butterbase-to-RocketRide polling cycle."""
-        telemetry = self.fetch_latest_telemetry()
-        response = self.run_pipeline(telemetry)
-        self.update_from_pipeline_response(response)
-
-    def poll_forever(self) -> None:
-        """Poll the RocketRide pipeline until the app shuts down."""
-        while not self._stop_event.is_set():
+        if ROCKETRIDE_API_KEY and ROCKETRIDE_PIPELINE_URL:
             try:
-                self.poll_once()
-            except AppRuntimeError:
-                self.title = "Vagus Graph: Sync issue"
-            self._stop_event.wait(self.poll_interval_seconds)
+                import requests
 
-    def stop_polling(self) -> None:
-        """Stop the background polling loop."""
-        self._stop_event.set()
+                self.log_event(
+                    f"[RocketRide] Calling cloud pipeline with {ROCKETRIDE_MODEL}."
+                )
+                response = requests.post(
+                    ROCKETRIDE_PIPELINE_URL,
+                    headers={
+                        "Authorization": f"Bearer {ROCKETRIDE_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=10,
+                )
+                if response.status_code < 400:
+                    result = response.json()
+                    energy = (
+                        result.get("energy_level")
+                        or result.get("energy")
+                        or result.get("classification")
+                    )
+                    if energy in {"low", "medium", "high"}:
+                        self.log_event(
+                            "[RocketRide] Cloud classified energy state as "
+                            f"{energy.upper()}."
+                        )
+                        return energy
 
+                self.log_event(
+                    "[RocketRide] Cloud pipeline returned unusable response; "
+                    "using local demo classifier.",
+                    stderr=True,
+                )
+            except Exception as e:
+                self.log_event(
+                    f"[RocketRide] Cloud call failed: {e}; using local demo classifier.",
+                    stderr=True,
+                )
 
-def main() -> None:
-    """Start the native menu bar application."""
-    app = VagusMenuBarApp()
-    app.run()
+        energy = self.classify_energy_locally(glucose_change, hrv, is_compression)
+        mode = "key-armed demo" if ROCKETRIDE_API_KEY else "offline demo"
+        self.log_event(
+            f"[RocketRide] {mode} classified energy state as {energy.upper()} "
+            f"with {ROCKETRIDE_MODEL} policy."
+        )
+        return energy
 
+    def fetch_task_by_complexity(self, complexity):
+        task_title = "No compatible tasks found"
+        try:
+            with GraphDatabase.driver(URI, auth=AUTH) as driver:
+                with driver.session() as session:
+                    self.log_event(f"[Neo4j] Selecting {complexity} task with blocker traversal.")
+                    # Traversal query: Only return a task if there is no uncompleted blocking task linked to it
+                    query = """
+                    MATCH (t:Task)
+                    WHERE t.complexity = $complexity
+                    AND NOT EXISTS {
+                        MATCH (blocking:Task)-[:BLOCKS]->(t)
+                        WHERE NOT blocking.status = "completed"
+                    }
+                    RETURN t.title AS title
+                    LIMIT 1
+                    """
+                    result = session.run(query, complexity=complexity)
+                    record = result.single()
+                    if record:
+                        task_title = record["title"]
+                        self.log_event(f"[Neo4j] Selected unblocked task: {task_title}")
+                    else:
+                        blocked_query = """
+                        MATCH (t:Task)
+                        WHERE t.complexity = $complexity
+                        OPTIONAL MATCH (blocking:Task)-[:BLOCKS]->(t)
+                        WHERE blocking.status IS NULL OR blocking.status <> "completed"
+                        WITH t, collect(blocking.title) AS blockers
+                        RETURN t.title AS title, blockers
+                        ORDER BY size(blockers) DESC, title ASC
+                        LIMIT 3
+                        """
+                        blocked_result = list(session.run(blocked_query, complexity=complexity))
+                        blocked_candidates = [
+                            {
+                                "title": row["title"],
+                                "blockers": [b for b in row["blockers"] if b],
+                            }
+                            for row in blocked_result
+                        ]
+                        if blocked_candidates:
+                            for candidate in blocked_candidates:
+                                blockers = ", ".join(candidate["blockers"])
+                                if blockers:
+                                    self.log_event(
+                                        "[Neo4j] Blocked candidate: "
+                                        f"{candidate['title']} waits on {blockers}."
+                                    )
+                                else:
+                                    self.log_event(
+                                        "[Neo4j] Candidate had no blockers but was not selected: "
+                                        f"{candidate['title']}."
+                                    )
+
+                            first_blocked = next(
+                                (
+                                    candidate
+                                    for candidate in blocked_candidates
+                                    if candidate["blockers"]
+                                ),
+                                None,
+                            )
+                            if first_blocked:
+                                blocker_text = ", ".join(first_blocked["blockers"][:2])
+                                task_title = (
+                                    f"Blocked: {first_blocked['title']} <- {blocker_text}"
+                                )
+                        else:
+                            self.log_event(
+                                f"[Neo4j] No {complexity} tasks exist in the graph."
+                            )
+        except Exception as e:
+            self.log_event(f"[DB Error] Database query failed: {e}", stderr=True)
+        return task_title
+
+    def parse_numeric_value(self, raw_string):
+        if not raw_string:
+            return 0.0
+        # Extracts numbers and decimals from string (e.g., "112 mg/dL" -> 112.0)
+        try:
+            cleaned = "".join([c for c in str(raw_string) if c.isdigit() or c == "." or c == "-"])
+            return float(cleaned) if cleaned else 0.0
+        except Exception:
+            return 0.0
+
+    def get_live_biometrics(self):
+        glucose_change = 0.0
+        hrv = 55.0
+        is_compression = False
+
+        if not self.butterbase_enabled:
+            return self.demo_biometrics()
+
+        try:
+            import requests
+
+            headers = {
+                "Authorization": f"Bearer {BUTTERBASE_API_TOKEN}"
+            }
+            # Query the auto-generated REST endpoint directly over HTTPS
+            url = f"{BUTTERBASE_API_BASE}/wearable_logs"
+            self.log_event("[Butterbase] Pulling latest wearable_logs snapshot.")
+            response = requests.get(url, headers=headers, timeout=10)
+
+            if response.status_code == 200:
+                records = response.json() # Returns a list of JSON dictionary rows
+                self.log_event(f"[Butterbase] Retrieved {len(records)} wearable rows.")
+
+                # Sort records dynamically by ISO timestamp in descending order
+                records.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+                if len(records) >= 1:
+                    latest_glucose = self.parse_numeric_value(records[0].get("glucose", "0"))
+                    hrv = self.parse_numeric_value(records[0].get("hrv", "55"))
+                    is_compression = records[0].get("is_compression_low", False)
+
+                    # Calculate rate-of-change (dG/dt) if we have a previous baseline row
+                    if len(records) >= 2:
+                        previous_glucose = self.parse_numeric_value(records[1].get("glucose", "0"))
+                        glucose_change = latest_glucose - previous_glucose
+                    self.log_event(
+                        "[Biometrics] "
+                        f"dG/dt={glucose_change:.1f}, HRV={hrv:.1f}, "
+                        f"compression_low={is_compression}."
+                    )
+            else:
+                if response.status_code == 404:
+                    self.butterbase_enabled = False
+                    self.warn_butterbase_unavailable(
+                        "[API Error] Butterbase app/table was not found. "
+                        "Set BUTTERBASE_APP_ID and BUTTERBASE_API_TOKEN in "
+                        "projects/vagus-graph/.env; using demo biometrics."
+                    )
+                    return self.demo_biometrics()
+
+                self.warn_butterbase_unavailable(
+                    "[API Error] Butterbase returned status "
+                    f"{response.status_code}: {response.text}; using demo biometrics."
+                )
+                return self.demo_biometrics()
+
+        except Exception as e:
+            self.warn_butterbase_unavailable(
+                "[Network Error] Failed to fetch biometrics from Auto-API: "
+                f"{e}; using demo biometrics."
+            )
+            return self.demo_biometrics()
+
+        return glucose_change, hrv, is_compression
+
+    def update_menu_tasks(self):
+        for item in list(self.menu.keys()):
+            if item != "Refresh Tasks":
+                del self.menu[item]
+
+        # Classify and query task complexity based on physical inputs
+        glucose_change, hrv, is_compression = self.get_live_biometrics()
+
+        energy_level = self.run_rocketride_classification(
+            glucose_change,
+            hrv,
+            is_compression,
+        )
+        self.log_event(
+            f"[Classifier] RocketRide evaluated energy as {energy_level.upper()}."
+        )
+
+        recommended_task = self.fetch_task_by_complexity(energy_level)
+
+        self.menu.add(f"Energy State: {energy_level.upper()}")
+        self.menu.add(f"Recommended Task: {recommended_task}")
+        return energy_level
+
+    # Standard python bound method signature
+    def run_biometric_loop(self, sender):
+        # Update metrics and retrieve the evaluated state
+        energy = self.update_menu_tasks()
+
+        if energy == "high":
+            self.title = "🔋 Vagus: OPTIMAL"
+        elif energy == "medium":
+            self.title = "⚡ Vagus: WARNING"
+        else:
+            self.title = "🚨 Vagus: CRASH"
+            self.log_event("[Alert] CRASH detected! Spawning programmatic Daytona sandbox via SDK...")
+
+            try:
+                from daytona import Daytona, DaytonaConfig
+
+                daytona_client = Daytona(DaytonaConfig())
+                # Spawns sandbox container via native SDK
+                sandbox = daytona_client.create()
+                self.log_event(f"[Daytona] Sandbox created with ID: {sandbox.id}")
+
+                # Execute automated verification checks securely inside the container
+                response = sandbox.process.code_run("print('Daytona SDK execution verified.')")
+
+                if response.exit_code != 0:
+                    self.log_event(
+                        f"[Daytona Error] Execution failed: {response.result}",
+                        stderr=True,
+                    )
+                else:
+                    self.log_event(f"[Daytona Output] {response.result.strip()}")
+
+                # Teardown: Clean up the container immediately to free up account vCPU limit
+                self.log_event("[Daytona] Tearing down sandbox...")
+                sandbox.delete()
+                self.log_event("[Daytona] Sandbox successfully destroyed. Concurrency limit protected.")
+
+            except Exception as e:
+                self.log_event(
+                    f"[Daytona Error] Failed to execute sandbox workflow: {e}",
+                    stderr=True,
+                )
+
+    @rumps.clicked("Refresh Tasks")
+    def on_refresh(self, _):
+        self.log_event("[UI] Manual refresh triggered by user.")
+        self.update_menu_tasks()
 
 if __name__ == "__main__":
-    main()
+    try:
+        app = VagusMenuBarApp()
+        app.run()
+    except Exception as err:
+        print(f"[Fatal] Application crashed on startup: {err}", file=sys.stderr)

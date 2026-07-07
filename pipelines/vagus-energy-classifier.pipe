@@ -1,0 +1,40 @@
+{
+  "name": "vagus-energy-classifier",
+  "description": "Demo pipeline contract for physiology-aware task selection.",
+  "runtime": "rocketride",
+  "model": "gpt-5.5",
+  "source": {
+    "type": "webhook",
+    "input": {
+      "glucose_change": "number",
+      "hrv": "number",
+      "is_compression_low": "boolean"
+    }
+  },
+  "nodes": [
+    {
+      "id": "classify_energy",
+      "type": "llm.classifier",
+      "model": "gpt-5.5",
+      "reasoning": {
+        "effort": "low"
+      },
+      "prompt": "Classify cognitive energy as low, medium, or high from glucose derivative, HRV, and compression state. Return only one allowed value.",
+      "output": {
+        "energy_level": ["low", "medium", "high"]
+      }
+    },
+    {
+      "id": "select_task",
+      "type": "neo4j.query",
+      "depends_on": ["classify_energy"],
+      "query": "MATCH (t:Task) WHERE t.complexity = $energy_level AND NOT EXISTS { MATCH (blocking:Task)-[:BLOCKS]->(t) WHERE blocking.status <> 'completed' } RETURN t.title AS title LIMIT 1"
+    },
+    {
+      "id": "write_log",
+      "type": "http.post",
+      "depends_on": ["classify_energy", "select_task"],
+      "target": "butterbase.system_logs"
+    }
+  ]
+}

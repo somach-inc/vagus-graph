@@ -1,0 +1,88 @@
+{
+  "tables": {
+    "wearable_logs": {
+      "columns": {
+        "glucose": {
+          "type": "text"
+        },
+        "hrv": {
+          "type": "text"
+        },
+        "is_compression_low": {
+          "type": "boolean",
+          "default": "false"
+        },
+        "timestamp": {
+          "type": "timestamptz",
+          "default": "now()"
+        }
+      }
+    },
+    "system_logs": {
+      "columns": {
+        "event": {
+          "type": "text"
+        },
+        "timestamp": {
+          "type": "timestamptz",
+          "default": "now()"
+        }
+      }
+    },
+    "energy_states": {
+      "columns": {
+        "energy_level": {
+          "type": "text"
+        },
+        "model": {
+          "type": "text"
+        },
+        "glucose_change": {
+          "type": "text"
+        },
+        "hrv": {
+          "type": "text"
+        },
+        "timestamp": {
+          "type": "timestamptz",
+          "default": "now()"
+        }
+      }
+    },
+    "task_recommendations": {
+      "columns": {
+        "task_title": {
+          "type": "text"
+        },
+        "energy_level": {
+          "type": "text"
+        },
+        "blocked_reason": {
+          "type": "text"
+        },
+        "timestamp": {
+          "type": "timestamptz",
+          "default": "now()"
+        }
+      }
+    },
+    "sandbox_runs": {
+      "columns": {
+        "provider": {
+          "type": "text",
+          "default": "'daytona'"
+        },
+        "status": {
+          "type": "text"
+        },
+        "result": {
+          "type": "text"
+        },
+        "timestamp": {
+          "type": "timestamptz",
+          "default": "now()"
+        }
+      }
+    }
+  }
+}

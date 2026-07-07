@@ -1,0 +1,28 @@
+{
+  "name": "vagus-graph",
+  "version": "1.0.0",
+  "description": "Closed-loop physiology dashboard for Vagus Graph.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "build:butterbase": "bash scripts/package-butterbase-frontend.sh",
+    "start": "next start",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "lucide-react": "^1.23.0",
+    "next": "^16.2.10",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^6.0.3"
+  }
+}

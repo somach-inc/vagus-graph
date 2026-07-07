@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vagus Graph</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Somach research console</p>
+          <h1>Vagus Graph</h1>
+        </div>
+        <div class="status-row">
+          <span id="source-pill" class="pill demo">demo</span>
+          <button id="config-button" type="button">Config</button>
+          <button id="refresh-button" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section class="task-section">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Task UI</p>
+            <h2>Recommended work queue</h2>
+          </div>
+        </div>
+        <div class="task-toolbar">
+          <div>
+            <span id="remaining-count">3 remaining</span>
+            <strong id="next-task">Verify Butterbase logs</strong>
+          </div>
+          <form id="manual-task-form">
+            <input id="manual-task-title" placeholder="Add manual task..." />
+            <button type="submit">Add</button>
+          </form>
+        </div>
+        <div class="task-grid">
+          <div id="task-list" class="task-list"></div>
+          <article class="latency-card">
+            <div>
+              <span>Demo latency</span>
+              <strong>Shortcut to screen</strong>
+            </div>
+            <div class="latency-list">
+              <div><span>Shortcut tap</span><strong>0s</strong></div>
+              <div><span>Butterbase write</span><strong>0.3-1.5s</strong></div>
+              <div><span>Dashboard poll</span><strong>0-2s</strong></div>
+              <div><span>RocketRide classify</span><strong>0.2-1.5s</strong></div>
+              <div><span>Neo4j blocker query</span><strong>&lt;0.3s local</strong></div>
+              <div><span>Daytona sandbox</span><strong>8-25s</strong></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="metrics">
+        <div class="metric">
+          <span>Energy</span>
+          <strong id="energy">MEDIUM</strong>
+        </div>
+        <div class="metric">
+          <span>RocketRide</span>
+          <strong id="rocketride">gpt-5.5</strong>
+        </div>
+        <div class="metric wide">
+          <span>Recommendation gate</span>
+          <strong id="blocker">No active blocker event</strong>
+        </div>
+        <div class="metric">
+          <span>Polling</span>
+          <strong>2s</strong>
+        </div>
+      </section>
+
+      <section class="workbench">
+        <section class="graph">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Closed loop</p>
+              <h2>Physiology to action</h2>
+            </div>
+          </div>
+          <div class="graph-grid">
+            <svg class="flow-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <defs>
+                <marker id="arrow" markerHeight="7" markerWidth="7" orient="auto" refX="6" refY="3.5">
+                  <path d="M0,0 L7,3.5 L0,7 Z"></path>
+                </marker>
+              </defs>
+              <path d="M14 22 H36"></path>
+              <path d="M38 22 H61"></path>
+              <path d="M63 22 H86"></path>
+              <path d="M88 28 V46"></path>
+              <path d="M84 52 C73 60 55 69 39 78"></path>
+              <path d="M84 52 C74 62 68 69 62 78"></path>
+              <path d="M64 78 H86"></path>
+              <path class="bypass" d="M38 27 C50 47 70 58 86 78"></path>
+            </svg>
+            <span class="edge-label l1">write row</span>
+            <span class="edge-label l2">classify</span>
+            <span class="edge-label l3">LLM policy</span>
+            <span class="edge-label l4">blocker query</span>
+            <span class="edge-label l5">safe task</span>
+            <span class="edge-label l6">crash branch</span>
+            <div class="node n1">iPhone</div>
+            <div class="node n2">Butterbase</div>
+            <div class="node n3">RocketRide</div>
+            <div class="node n4">GPT-5.5</div>
+            <div class="node n5">Neo4j blockers</div>
+            <div class="node n6">macOS bar</div>
+            <div class="node n7">Daytona</div>
+            <div class="node n8">Dashboard</div>
+          </div>
+        </section>
+
+        <aside class="terminal-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Live execution</p>
+              <h2>System logs</h2>
+            </div>
+          </div>
+          <div id="terminal" class="terminal"></div>
+          <footer class="terminal-footer">
+            <span id="updated">--:--:--</span>
+            <span id="count">0 rows</span>
+          </footer>
+        </aside>
+      </section>
+    </main>
+
+    <dialog id="config-dialog">
+      <form method="dialog" class="config-form">
+        <h2>Butterbase config</h2>
+        <label>
+          App ID
+          <input id="app-id" autocomplete="off" placeholder="app_..." />
+        </label>
+        <label>
+          API token
+          <input id="api-token" autocomplete="off" placeholder="bb_sk_..." type="password" />
+        </label>
+        <p>
+          Values stay in this browser's localStorage. Leave blank for demo mode.
+        </p>
+        <div class="dialog-actions">
+          <button id="clear-config" value="clear" type="button">Clear</button>
+          <button value="cancel">Cancel</button>
+          <button id="save-config" value="default">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

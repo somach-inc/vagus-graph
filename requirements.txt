@@ -1,4 +1,4 @@
-requests>=2.32.0
 rumps>=0.4.0
-cognee>=0.2.0
-python-dotenv>=1.0.1
+neo4j>=5.28.0
+requests>=2.32.0
+daytona>=0.16.0

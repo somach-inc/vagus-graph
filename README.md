@@ -1,72 +1,108 @@
 # Vagus Graph
 
-Closed-loop cognitive augmentation prototype for physiological telemetry fusion, graph-backed task routing, macOS menu bar status, and low-energy Daytona sandbox automation.
+Vagus Graph is a closed-loop cognitive scaffolding demo. It takes live wearable
+signals, classifies cognitive energy, checks a Neo4j task dependency graph, and
+updates both a Butterbase-hosted dashboard and a macOS menu bar app.
 
-## Files
+## Live demo
 
-- `sensor_engine.py`: reads Stelo glucose from Apple Health export XML, polls Oura Cloud when configured, filters compression lows, and posts cleaned wearable logs to Butterbase.
-- `app.py`: macOS menu bar app that polls RocketRide, updates cognitive state, and launches Daytona on low-energy states.
-- `memory.py`: Cognee semantic memory integration backed by Neo4j Aura.
-- `schema.cypher`: Neo4j Aura schema, seed graph shape, and state-aware task query.
-- `test_vagus.py`: unit tests with mocked network and subprocess calls.
+- Dashboard: https://vagus-db-two.butterbase.dev
+- Butterbase app: `app_30r72zucrg4n`
+- Static deploy source: `butterbase-static/`
+- Static deploy package: `dist/vagus-graph-butterbase.zip`
 
-## Setup
+## Causal loop
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-cp .env.example .env
-```
+1. iPhone Shortcut writes biometrics to Butterbase `wearable_logs`.
+2. `app.py` polls Butterbase, parses glucose and HRV, and estimates trend.
+3. RocketRide adapter classifies energy with the `gpt-5.5` policy.
+4. Neo4j filters tasks through `[:BLOCKS]` prerequisites.
+5. The menu bar updates the current state and recommended task.
+6. The dashboard polls `system_logs` every two seconds.
+7. Low-energy states can trigger a Daytona sandbox verification branch.
 
-Fill in `.env` before running live integrations.
-
-## Required environment keys
-
-- `ROCKETRIDE_SECRET`: RocketRide Cloud bearer token.
-- `APPLE_HEALTH_EXPORT_XML`: absolute path to Apple Health `export.xml` containing Stelo blood-glucose records.
-- `OURA_ACCESS_TOKEN`: Oura Cloud API OAuth access token with `daily` and relevant wearable scopes.
-- `GRAPH_DATABASE_URL`: Neo4j Aura URI, such as `neo4j+s://<db-id>.databases.neo4j.io`.
-- `GRAPH_DATABASE_PASSWORD`: Neo4j Aura password.
-- `LLM_API_KEY`: LLM provider key used by Cognee.
-
-## Optional environment keys
-
-- `BUTTERBASE_API_KEY`: bearer token for Butterbase if the REST endpoint requires authentication.
-- `OURA_IS_VERTICAL`: posture override for compression-low filtering. Oura Cloud does not expose real-time posture; use `false` for sleep/rest exports and `true` if you know the reading occurred upright.
-- `GRAPH_DATABASE_PROVIDER`: defaults to `neo4j` in the example env.
-- `GRAPH_DATABASE_USERNAME`: defaults to `neo4j` in the example env.
-
-## Stelo via Apple Health
-
-The Stelo app can write blood-glucose readings into Apple Health. Apple Health exports all data as XML, so this project reads the latest two `HKQuantityTypeIdentifierBloodGlucose` records from `export.xml`.
-
-1. On iPhone, open Health.
-2. Tap your profile picture or initials.
-3. Tap Export All Health Data.
-4. Share the export to your Mac with AirDrop or Files.
-5. Unzip the export.
-6. Find `apple_health_export/export.xml`.
-7. Set the absolute path in `.env`:
+## Run locally
 
 ```bash
-APPLE_HEALTH_EXPORT_XML=/Users/carl/Downloads/apple_health_export/export.xml
+cd /Users/carl/Downloads/somach/projects/vagus-graph
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+./venv/bin/python app.py
 ```
 
-## Oura
-
-Oura Cloud API V2 uses OAuth2 bearer tokens. Create an Oura API application, authorize your own account, and put the access token in `.env`:
+For the Next.js local dashboard:
 
 ```bash
-OURA_ACCESS_TOKEN=...
-OURA_IS_VERTICAL=false
+npm run dev
 ```
 
-Oura Cloud can provide daily activity and sleep-derived HRV, but it does not provide true real-time body posture through the public API. The compression-low posture input is therefore an explicit override.
-
-## Test
+For the Butterbase static package:
 
 ```bash
-python -m unittest -v test_vagus.py
+npm run build:butterbase
 ```
+
+Deploy to Butterbase:
+
+```bash
+npx -y @butterbase/cli deploy butterbase-static \
+  --app app_30r72zucrg4n \
+  --framework static
+```
+
+## Tables
+
+Apply schema:
+
+```bash
+npx -y @butterbase/cli schema apply schemas/butterbase.json \
+  --app app_30r72zucrg4n \
+  --name vagus-demo-tables
+```
+
+Core tables:
+
+- `wearable_logs`: raw iPhone/HealthKit rows.
+- `system_logs`: live execution log stream.
+- `energy_states`: long-term classification records.
+- `task_recommendations`: selected task and blocked reason.
+- `sandbox_runs`: Daytona run metadata.
+
+## Demo shortcuts
+
+Use three iPhone Shortcuts rather than background automation:
+
+- `Normal`: stable glucose/HRV.
+- `Crash`: low HRV or glucose drop.
+- `Recovery`: stable follow-up row.
+
+Manual triggers are better than every-second automation because iOS Shortcuts
+are not a reliable one-second background scheduler and CGM data is not a 1 Hz
+signal.
+
+## Expected latency
+
+| Step | Expected latency |
+| :--- | ---: |
+| Shortcut tap -> Butterbase row | 0.3-1.5s |
+| Butterbase row -> dashboard | 0-2s |
+| `app.py` polling cycle | up to 10s |
+| RocketRide classification | 0.2-1.5s |
+| Neo4j blocker query | <0.3s local |
+| Daytona sandbox branch | 8-25s |
+
+## One-shot recording checklist
+
+1. Open `https://vagus-db-two.butterbase.dev`.
+2. Open iPhone Mirroring with Stelo, Oura, and Shortcuts ready.
+3. Open Neo4j Browser for the task-blocker graph.
+4. In dashboard Config, save app id and token.
+5. Start `app.py`.
+6. Put macOS menu bar in frame.
+7. Start Loom with camera on.
+8. Show CGM and Oura briefly.
+9. Turn camera off.
+10. Screen-share dashboard plus menu bar.
+11. Tap `Normal`, then `Crash`, then `Recovery` Shortcut through iPhone Mirroring.
+12. Switch briefly to Neo4j Browser to show `(:Task)-[:BLOCKS]->(:Task)`.
+13. Narrate the logs and Task UI changes.
