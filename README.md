@@ -1,10 +1,13 @@
-# Vagus Graph
+# Vagus Graph: A Biodata-driven Task Manager
 
 Vagus Graph is a closed-loop cognitive scaffolding demo. It takes live wearable
-signals, classifies cognitive energy, checks a Neo4j task dependency graph, and
+signals (blood glucose from Stelo by Dexcom and heartrate variability from Oura Ring 5), classifies cognitive energy, checks a Neo4j task dependency graph, and
 updates both a Butterbase-hosted dashboard and a macOS menu bar app.
 
 ## Live demo
+
+[![Watch the demo](https://cdn.loom.com/sessions/thumbnails/28a5c239df144343a2d14030c15c9dab-09f603b17cff625b.jpg)](https://www.loom.com/share/28a5c239df144343a2d14030c15c9dab)
+
 
 - Dashboard: https://vagus-db-two.butterbase.dev
 - Butterbase app: `app_30r72zucrg4n`
