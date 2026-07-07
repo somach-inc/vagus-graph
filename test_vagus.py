@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
 import app
-from sensor_engine import VagusSensorEngine
+from sensor_engine import TelemetryError, VagusSensorEngine
 
 
 class SensorFusionTests(unittest.TestCase):
@@ -48,7 +50,11 @@ class SensorFusionTests(unittest.TestCase):
     def test_collect_clean_telemetry_from_mock_payloads(self) -> None:
         engine = VagusSensorEngine()
 
-        telemetry = engine.collect_clean_telemetry()
+        with mock.patch.dict(
+            "os.environ",
+            {"APPLE_HEALTH_EXPORT_XML": "", "OURA_ACCESS_TOKEN": ""},
+        ):
+            telemetry = engine.collect_clean_telemetry()
 
         self.assertEqual(telemetry["glucose_rate_of_change"], -16.5)
         self.assertEqual(telemetry["hrv_ms"], 32)
@@ -65,15 +71,104 @@ class SensorFusionTests(unittest.TestCase):
         response.raise_for_status.return_value = None
         mock_post.return_value = response
         engine = VagusSensorEngine()
-        telemetry = engine.collect_clean_telemetry()
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "APPLE_HEALTH_EXPORT_XML": "",
+                "OURA_ACCESS_TOKEN": "",
+                "BUTTERBASE_API_KEY": "",
+            },
+        ):
+            telemetry = engine.collect_clean_telemetry()
 
-        engine.post_clean_telemetry(telemetry)
+            engine.post_clean_telemetry(telemetry)
 
         mock_post.assert_called_once_with(
             "https://api.butterbase.ai/v1/db/wearable_logs",
             json=telemetry,
             timeout=10.0,
         )
+
+    def test_reads_stelo_glucose_from_apple_health_export(self) -> None:
+        export_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData>
+  <Record type="HKQuantityTypeIdentifierBloodGlucose" sourceName="Stelo" unit="mg/dL" value="118" startDate="2026-07-07 12:00:00 -0700" endDate="2026-07-07 12:00:00 -0700"/>
+  <Record type="HKQuantityTypeIdentifierBloodGlucose" sourceName="Stelo" unit="mg/dL" value="101" startDate="2026-07-07 12:05:00 -0700" endDate="2026-07-07 12:05:00 -0700"/>
+</HealthData>
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            export_path = Path(temp_dir) / "export.xml"
+            export_path.write_text(export_xml, encoding="utf-8")
+            engine = VagusSensorEngine()
+
+            payload = engine.poll_stelo_from_apple_health(export_path)
+
+        self.assertEqual(payload["data"][-2]["glucose_mg_dl"], 118.0)
+        self.assertEqual(payload["data"][-1]["glucose_mg_dl"], 101.0)
+
+    def test_collects_with_apple_health_export_when_configured(self) -> None:
+        export_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData>
+  <Record type="HKQuantityTypeIdentifierBloodGlucose" unit="mg/dL" value="118" startDate="2026-07-07 12:00:00 -0700" endDate="2026-07-07 12:00:00 -0700"/>
+  <Record type="HKQuantityTypeIdentifierBloodGlucose" unit="mg/dL" value="101" startDate="2026-07-07 12:05:00 -0700" endDate="2026-07-07 12:05:00 -0700"/>
+</HealthData>
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            export_path = Path(temp_dir) / "export.xml"
+            export_path.write_text(export_xml, encoding="utf-8")
+            engine = VagusSensorEngine()
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "APPLE_HEALTH_EXPORT_XML": str(export_path),
+                    "OURA_ACCESS_TOKEN": "",
+                },
+            ):
+                telemetry = engine.collect_clean_telemetry()
+
+        self.assertEqual(telemetry["glucose_rate_of_change"], -17.0)
+        self.assertTrue(telemetry["is_compression_low"])
+
+    def test_apple_health_export_requires_two_glucose_readings(self) -> None:
+        export_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData>
+  <Record type="HKQuantityTypeIdentifierBloodGlucose" unit="mg/dL" value="118" startDate="2026-07-07 12:00:00 -0700" endDate="2026-07-07 12:00:00 -0700"/>
+</HealthData>
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            export_path = Path(temp_dir) / "export.xml"
+            export_path.write_text(export_xml, encoding="utf-8")
+            engine = VagusSensorEngine()
+
+            with self.assertRaises(TelemetryError):
+                engine.poll_stelo_from_apple_health(export_path)
+
+    @mock.patch("sensor_engine.requests.get")
+    def test_polls_oura_cloud_when_access_token_is_configured(
+        self,
+        mock_get: mock.Mock,
+    ) -> None:
+        activity_response = mock.Mock()
+        activity_response.raise_for_status.return_value = None
+        activity_response.json.return_value = {
+            "data": [{"steps": 0, "met_minutes": 0.5}]
+        }
+        sleep_response = mock.Mock()
+        sleep_response.raise_for_status.return_value = None
+        sleep_response.json.return_value = {"data": [{"average_hrv": 41}]}
+        mock_get.side_effect = [activity_response, sleep_response]
+        engine = VagusSensorEngine()
+
+        with mock.patch.dict(
+            "os.environ",
+            {"OURA_ACCESS_TOKEN": "token", "OURA_IS_VERTICAL": "false"},
+        ):
+            payload = engine.poll_oura_ring()
+
+        self.assertEqual(payload["heartrate"]["data"][0]["hrv_ms"], 41)
+        self.assertFalse(payload["posture"]["motion_detected"])
+        self.assertFalse(payload["posture"]["is_vertical"])
 
 
 class MenuBarAppTests(unittest.TestCase):
@@ -172,7 +267,11 @@ class MenuBarAppTests(unittest.TestCase):
         mock_post.return_value = rocketride_response
         menu_app = self.make_app()
 
-        menu_app.poll_once()
+        with mock.patch.dict(
+            "os.environ",
+            {"BUTTERBASE_API_KEY": "", "ROCKETRIDE_SECRET": ""},
+        ):
+            menu_app.poll_once()
 
         self.assertEqual(menu_app.title, "⚡ MODERATE: Focus Routine")
         mock_get.assert_called_once_with(
