@@ -1,20 +1,24 @@
-# Vagus Graph: A Biodata-driven Task Manager
-
-GATEKEPT WEARABLE HEALTH DATA IS **NOT PUNK**
+# Vagus Graph: Biodata-driven Task Manager
 
 Vagus Graph is a closed-loop cognitive scaffolding demo. It takes live wearable
-signals (blood glucose from Stelo by Dexcom and heartrate variability from Oura Ring 5), classifies cognitive energy, checks a Neo4j task dependency graph, and
+signals, classifies cognitive energy, checks a Neo4j task dependency graph, and
 updates both a Butterbase-hosted dashboard and a macOS menu bar app.
 
 ## Live demo
-
-[![Watch the demo](https://cdn.loom.com/sessions/thumbnails/28a5c239df144343a2d14030c15c9dab-09f603b17cff625b.jpg)](https://www.loom.com/share/28a5c239df144343a2d14030c15c9dab)
-
 
 - Dashboard: https://vagus-db-two.butterbase.dev
 - Butterbase app: `app_30r72zucrg4n`
 - Static deploy source: `butterbase-static/`
 - Static deploy package: `dist/vagus-graph-butterbase.zip`
+
+## Project records
+
+Project narrative and audit-friendly records use ISO 8601 machine-sortable
+filenames:
+
+- `2026-07-07_RD_vagus-graph_hackwithbay-story.md`
+- `2026-07-08_OPS_vagus-graph_machine-sortable-filing-prompt.md`
+- `2026-07-08_OPS_vagus-graph_hackwithbay-submission-details.md`
 
 ## Causal loop
 
@@ -73,6 +77,18 @@ Core tables:
 - `task_recommendations`: selected task and blocked reason.
 - `sandbox_runs`: Daytona run metadata.
 
+## Demo shortcuts
+
+Use three iPhone Shortcuts rather than background automation:
+
+- `Normal`: stable glucose/HRV.
+- `Crash`: low HRV or glucose drop.
+- `Recovery`: stable follow-up row.
+
+Manual triggers are better than every-second automation because iOS Shortcuts
+are not a reliable one-second background scheduler and CGM data is not a 1 Hz
+signal.
+
 ## Expected latency
 
 | Step | Expected latency |
@@ -83,3 +99,19 @@ Core tables:
 | RocketRide classification | 0.2-1.5s |
 | Neo4j blocker query | <0.3s local |
 | Daytona sandbox branch | 8-25s |
+
+## One-shot recording checklist
+
+1. Open `https://vagus-db-two.butterbase.dev`.
+2. Open iPhone Mirroring with Stelo, Oura, and Shortcuts ready.
+3. Open Neo4j Browser for the task-blocker graph.
+4. In dashboard Config, save app id and token.
+5. Start `app.py`.
+6. Put macOS menu bar in frame.
+7. Start Loom with camera on.
+8. Show CGM and Oura briefly.
+9. Turn camera off.
+10. Screen-share dashboard plus menu bar.
+11. Tap `Normal`, then `Crash`, then `Recovery` Shortcut through iPhone Mirroring.
+12. Switch briefly to Neo4j Browser to show `(:Task)-[:BLOCKS]->(:Task)`.
+13. Narrate the logs and Task UI changes.
