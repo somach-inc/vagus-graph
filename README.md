@@ -1,5 +1,7 @@
 # Vagus Graph: A Biodata-driven Task Manager
 
+GATEKEPT WEARABLE HEALTH DATA IS **NOT PUNK**
+
 Vagus Graph is a closed-loop cognitive scaffolding demo. It takes live wearable
 signals (blood glucose from Stelo by Dexcom and heartrate variability from Oura Ring 5), classifies cognitive energy, checks a Neo4j task dependency graph, and
 updates both a Butterbase-hosted dashboard and a macOS menu bar app.
